@@ -7,6 +7,7 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
@@ -73,6 +74,7 @@ public class RecordButton extends Button {
 
     private void startRecording() {
         isAudioRecording = true;
+
         Thread thread = new Thread(new AudioRecordThread());
         thread.start();
 //        mRecorder = new MediaRecorder();
@@ -129,13 +131,15 @@ public class RecordButton extends Button {
 
     boolean isAudioRecording;
     class AudioRecordThread implements Runnable {
-        final Handler mHandler = new Handler();
         @Override
         public void run() {
             int bufferLength = 0;
             int bufferSize;
             short[] audioData;
             int bufferReadResult;
+
+            Looper.prepare();
+            final Handler mHandler = new Handler();
 
             try {
                 bufferSize = AudioRecord.getMinBufferSize(44100,
@@ -154,7 +158,6 @@ public class RecordButton extends Button {
                 audioRecord.startRecording();
                 Log.d(LOG_TAG, "audioRecord.startRecording()");
 
-                Short[] result;
                 List<Short> shorts = new ArrayList<>();
 
                 /* ffmpeg_audio encoding loop */
@@ -174,27 +177,27 @@ public class RecordButton extends Button {
                     //result = ArrayUtils.addAll(result, audioData);
                 }
 
-                result = new Short[shorts.size()];
-                result = shorts.toArray(result);
+                RecognitionActivity.audio = new Short[shorts.size()];
+                RecognitionActivity.audio = shorts.toArray(RecognitionActivity.audio);
 
-                final Short[] finalResult = result;
+                if(listener!=null) listener.callback(RecordButton.this, "success");
 
-                DataOutputStream dos = null;
-                try {
-                    dos = new DataOutputStream(new FileOutputStream(mFileName));
-                    for (short aFinalResult : finalResult) {
-                        dos.writeShort(aFinalResult);
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                } finally {
-                    try {
-                        dos.close();
-                    } catch (IOException | NullPointerException e) {
-                        e.printStackTrace();
-                    }
-                }
-                
+//                DataOutputStream dos = null;
+//                try {
+//                    dos = new DataOutputStream(new FileOutputStream(mFileName));
+//                    for (short aFinalResult : finalResult) {
+//                        dos.writeShort(aFinalResult);
+//                    }
+//                } catch (IOException e) {
+//                    e.printStackTrace();
+//                } finally {
+//                    try {
+//                        dos.close();
+//                    } catch (IOException | NullPointerException e) {
+//                        e.printStackTrace();
+//                    }
+//                }
+
                 Runnable runnable = new Runnable() {
                     public void run() {
                         /* encoding finish, release recorder */
@@ -216,6 +219,7 @@ public class RecordButton extends Button {
                         if(listener!=null) listener.callback(RecordButton.this, "success");
                     }
                 };
+                Looper.prepare();
                 mHandler.post(runnable);
             } catch (Exception e) {
                 Log.e(LOG_TAG, "get audio data failed:"+e.getMessage()+e.getCause()+e.toString());

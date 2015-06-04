@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Looper;
 import android.support.v7.app.ActionBarActivity;
 import android.util.Log;
 import android.view.Menu;
@@ -53,7 +54,10 @@ public class RecognitionActivity extends ActionBarActivity {
 
     Map<Music, Integer> musicMap;
     static TreeMap<Music,Integer> sortedMusicMap;
+    static HashMap<Music, List<Integer>> timing;
+
     List<Long> hashes = new ArrayList<>();
+    static Short[] audio =null;
 
     private static ProgressDialog pd;
 
@@ -95,6 +99,7 @@ public class RecognitionActivity extends ActionBarActivity {
     }
 
     private void collectMusicData(final String filename){
+        Looper.prepare();
         final Handler mHandler = new Handler();
         new Thread() {
             public void run() {
@@ -118,6 +123,7 @@ public class RecognitionActivity extends ActionBarActivity {
                         }
                     }
                 };
+                Looper.prepare();
                 mHandler.post(runnable);
             }
         }.start();
@@ -175,7 +181,7 @@ public class RecognitionActivity extends ActionBarActivity {
         private int LOWER_LIMIT = 40;
         private int UPPER_LIMIT = 300;
         private int CHUNK_SIZE = 4096;
-        Short[] audio =null;
+
 
         String fw = "";
 
@@ -189,55 +195,56 @@ public class RecognitionActivity extends ActionBarActivity {
 //            final BufferedInputStream in = new BufferedInputStream(new FileInputStream(new File(filePath)));
             hideProgress();
             showProgress("Auidio converting to Hashes");
+            indexAudioFile();
 
-            final Handler handler = new Handler();
-            new Thread() {
-                public void run() {
-//                    int read;
-//                    byte[] buff = new byte[CHUNK_SIZE];
-//                    byte[] bytes = null;
-//                    try {
-//                        while ((read = in.read(buff)) > 0){
-//                            out.write(buff, 0, read);
-//                            out.flush();
-//                            bytes = out.toByteArray();
-//                            //audio = out.toByteArray();
-//                        }
+//            final Handler handler = new Handler();
+//            new Thread() {
+//                public void run() {
+////                    int read;
+////                    byte[] buff = new byte[CHUNK_SIZE];
+////                    byte[] bytes = null;
+////                    try {
+////                        while ((read = in.read(buff)) > 0){
+////                            out.write(buff, 0, read);
+////                            out.flush();
+////                            bytes = out.toByteArray();
+////                            //audio = out.toByteArray();
+////                        }
+////
+////                    } catch (IOException | NullPointerException e) {
+////                        e.printStackTrace();
+////                    }
 //
-//                    } catch (IOException | NullPointerException e) {
-//                        e.printStackTrace();
-//                    }
-
-                    readShortFromFile(filePath);
-
-//                    final byte[] finalBytes = bytes;
-                    Runnable runnable = new Runnable() {
-                        public void run() {
-
-//                            short[] shorts = new short[finalBytes.length/2];
-//                            Log.e("lol", finalBytes.length + "");
-//                            for (int i = 0; i < finalBytes.length/2; i++) {
-//                                shorts[i] = (short)((finalBytes[2*i] << 8) | finalBytes[2*i + 1]);
+//                    //readShortFromFile(filePath);
+//
+////                    final byte[] finalBytes = bytes;
+//                    Runnable runnable = new Runnable() {
+//                        public void run() {
+//
+////                            short[] shorts = new short[finalBytes.length/2];
+////                            Log.e("lol", finalBytes.length + "");
+////                            for (int i = 0; i < finalBytes.length/2; i++) {
+////                                shorts[i] = (short)((finalBytes[2*i] << 8) | finalBytes[2*i + 1]);
+////                            }
+////                            audio = ArrayUtils.addAll(audio, shorts);
+//
+//                            hideProgress();
+//                            indexAudioFile();
+//
+//                            mFileName = Environment.getExternalStorageDirectory().getAbsolutePath();
+//                            mFileName += "/audioTest.txt";
+//
+//                            try {
+//                                org.apache.commons.io.FileUtils.writeStringToFile(new File(mFileName), fw);
+//                            } catch (IOException e) {
+//                                e.printStackTrace();
 //                            }
-//                            audio = ArrayUtils.addAll(audio, shorts);
-
-                            hideProgress();
-                            indexAudioFile();
-
-                            mFileName = Environment.getExternalStorageDirectory().getAbsolutePath();
-                            mFileName += "/audioTest.txt";
-
-                            try {
-                                org.apache.commons.io.FileUtils.writeStringToFile(new File(mFileName), fw);
-                            } catch (IOException e) {
-                                e.printStackTrace();
-                            }
-                            Toast.makeText(RecognitionActivity.this, "DONE", Toast.LENGTH_SHORT).show();
-                        }
-                    };
-                    handler.post(runnable);
-                }
-            }.start();
+//                            Toast.makeText(RecognitionActivity.this, "DONE", Toast.LENGTH_SHORT).show();
+//                        }
+//                    };
+//                    handler.post(runnable);
+//                }
+//            }.start();
 
         }
 
@@ -285,7 +292,6 @@ public class RecognitionActivity extends ActionBarActivity {
                 results[times] = transformer.transform(complex, TransformType.FORWARD);
             }
 
-            resultText.setText("");
             hashes = new ArrayList<>();
             for(int i = 0; i<amountPossible; i++) processLine(results[i]);
 
@@ -295,6 +301,7 @@ public class RecognitionActivity extends ActionBarActivity {
                 e.printStackTrace();
             }
 
+            hideProgress();
             //TODO Chose one of the following
             match(amountPossible);
             //saveHashesRecursive();
@@ -370,18 +377,32 @@ public class RecognitionActivity extends ActionBarActivity {
         total = 0;
         matches = 0;
         musicMap.clear();
+
+        timing = new HashMap<Music, List<Integer>>();
         for(Long hash : hashes) {
+            final Long fHash = hash;
             GetHashQuery.executeInBackGround( hash, new FunctionCallback<HashMap>() {
                 public void done(HashMap result, ParseException e) {
                     ++total;
                     if (e == null) {
                         matches++;
-                        Log.e("HASH MATCHING", result.toString());
+
                         ArrayList<DataPoint> dataPoints = (ArrayList<DataPoint>) result.get("dataPoint");
                         ArrayList<Music> musics = (ArrayList<Music>) result.get("music");
-                        for(Music music : musics) {
-                            if(musicMap.containsKey(music)) musicMap.put(music, (musicMap.get(music)+1) );
+
+                        for(int i = 0; i< musics.size(); ++i){
+                            Music music = musics.get(i);
+                            DataPoint point = dataPoints.get(i);
+
+                            if(!timing.containsKey(music)) timing.put(music, new ArrayList<Integer>());
+                            List<Integer> song_timings = timing.get(music);
+
+                            if (musicMap.containsKey(music))
+                                musicMap.put(music, (musicMap.get(music) + 1));
                             else musicMap.put(music, 1);
+                            Log.e("HASH MATCHING", music.getSongArtist() + " - " + music.getSongName() + " " + point.getLine());
+                            song_timings.add( point.getLine() - hashes.indexOf(fHash));
+                            timing.put(music, song_timings);
                         }
 
                     } else {
