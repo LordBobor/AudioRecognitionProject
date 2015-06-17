@@ -7,32 +7,40 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 
-import org.apache.commons.lang3.ArrayUtils;
+import com.google.common.base.Splitter;
 
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.http.message.BasicNameValuePair;
+
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.Socket;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Created by ekozoch on 16.02.15.
  */
 public class RecordButton extends Button {
     boolean mStartRecording = true;
-
+    WebSocketClient client;
     private static final String LOG_TAG = "AudioRecordTest";
-    private static String mFileName = null;
-
-    private MediaRecorder mRecorder = null;
 
     public RecordButton(Context context) {
         super(context);
@@ -50,6 +58,7 @@ public class RecordButton extends Button {
         super(context, attrs, defStyleAttr);
         setText("Start recording");
         setOnClickListener(clicker);
+
     }
 
     @TargetApi(Build.VERSION_CODES.LOLLIPOP)
@@ -59,8 +68,53 @@ public class RecordButton extends Button {
         setOnClickListener(clicker);
     }
 
-    public void setFileName(String mFileName) {
-        RecordButton.mFileName = mFileName;
+    private void setUpWebSocketClient(){
+        final Thread thread = new Thread(new AudioRecordThread());
+        List<BasicNameValuePair> extraHeaders = Collections.singletonList(
+                new BasicNameValuePair("Cookie", "session=abcd")
+        );
+        client = new WebSocketClient(URI.create("ws://enigmatic-ravine-9497.herokuapp.com/client"), new WebSocketClient.Listener() {
+            private boolean recognized;
+            private String message;
+            @Override
+            public void onConnect() {
+                Log.e("SOCKET SERVER", "Connected!");
+                recognized = false;
+                message = "";
+                Looper.prepare();
+                thread.start();
+            }
+
+            @Override
+            public void onMessage(String message) {
+                stopRecording();
+
+                Log.e("SOCKET SERVER", "recieved message:" + message);
+                thread.interrupt();
+                recognized = true;
+                this.message = message;
+            }
+
+            @Override
+            public void onMessage(byte[] data) {
+
+            }
+
+            @Override
+            public void onDisconnect(int code, String reason) {
+                Log.e("SOCKET SERVER", "Disconnected: " + reason);
+                if(recognized)
+                    if(listener!=null) {
+                        recognized = false;
+                        listener.onRecognized(RecordButton.this, message);
+                    }
+            }
+
+            @Override
+            public void onError(Exception error) {
+                error.printStackTrace();
+            }
+        }, extraHeaders);
     }
 
     private void onRecord(boolean start) {
@@ -73,34 +127,13 @@ public class RecordButton extends Button {
 
     private void startRecording() {
         isAudioRecording = true;
-        Thread thread = new Thread(new AudioRecordThread());
-        thread.start();
-//        mRecorder = new MediaRecorder();
-//        mRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
-//        mRecorder.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS);
-//        mRecorder.setOutputFile(mFileName);
-//        mRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-//
-//        try {
-//            mRecorder.prepare();
-//        } catch (IOException e) {
-//            Log.e(LOG_TAG, "prepare() failed");
-//        }
-//
-//        mRecorder.start();
+        setUpWebSocketClient();
+        client.connect();
     }
 
     private void stopRecording() {
         isAudioRecording = false;
-//        try{
-//            mRecorder.stop();
-//        }catch(RuntimeException stopException){
-//            //handle cleanup here
-//        }
-//
-//        mRecorder.release();
-//        mRecorder = null;
-//        if(listener!=null) listener.callback(this, "success");
+        mStartRecording = true;
     }
 
 
@@ -114,12 +147,7 @@ public class RecordButton extends Button {
         @Override
         public void onClick(View v) {
             onRecord(mStartRecording);
-            if (mStartRecording) {
-                setText("Stop recording");
-            } else {
-                RecognitionActivity.showProgress("Some preprocessing stuff");
-                setText("Start recording");
-            }
+            if(listener!=null) listener.onRecognitionStart(RecordButton.this);
             mStartRecording = !mStartRecording;
         }
     };
@@ -135,7 +163,6 @@ public class RecordButton extends Button {
             int bufferLength = 0;
             int bufferSize;
             short[] audioData;
-            int bufferReadResult;
 
             try {
                 bufferSize = AudioRecord.getMinBufferSize(44100,
@@ -149,52 +176,34 @@ public class RecordButton extends Button {
 
                 /* set audio recorder parameters, and start recording */
                 final AudioRecord audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, 44100,
-                        AudioFormat.CHANNEL_CONFIGURATION_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferLength);
+                        AudioFormat.CHANNEL_CONFIGURATION_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferLength*8);
                 audioData = new short[bufferLength];
                 audioRecord.startRecording();
                 Log.d(LOG_TAG, "audioRecord.startRecording()");
 
-                Short[] result;
                 List<Short> shorts = new ArrayList<>();
 
+
+                FeatureExtractor extractor = new FeatureExtractor();
                 /* ffmpeg_audio encoding loop */
                 while (isAudioRecording) {
                     audioRecord.read(audioData, 0, audioData.length);
-//                    int index;
-//                    int iterations = audioData.length;
 
-//                    ByteBuffer bb = ByteBuffer.allocate(audioData.length * 2);
+                    for (short tmp : audioData) {
+                        shorts.add(tmp);
+                        int hash = extractor.nextSignal(tmp);
+                        if(hash == -1) continue;
+                        //Log.e("HASH OBTAINED", hash + "");
+                        client.send(ByteBuffer.allocate(4).putInt(hash).array());
+                    }
+                }
+
 //
-//                    for(index = 0; index != iterations; ++index)
-//                    {
-//                        bb.putShort(audioData[index]);
-//                    }
-                    for (short tmp : audioData)
-                    shorts.add(tmp);
-                    //result = ArrayUtils.addAll(result, audioData);
-                }
+//                RecognitionActivity.audio = new Short[shorts.size()];
+//                RecognitionActivity.audio = shorts.toArray(RecognitionActivity.audio);
+//
+//                if(listener!=null) listener.onRecognized(RecordButton.this, "success");
 
-                result = new Short[shorts.size()];
-                result = shorts.toArray(result);
-
-                final Short[] finalResult = result;
-
-                DataOutputStream dos = null;
-                try {
-                    dos = new DataOutputStream(new FileOutputStream(mFileName));
-                    for (short aFinalResult : finalResult) {
-                        dos.writeShort(aFinalResult);
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                } finally {
-                    try {
-                        dos.close();
-                    } catch (IOException | NullPointerException e) {
-                        e.printStackTrace();
-                    }
-                }
-                
                 Runnable runnable = new Runnable() {
                     public void run() {
                         /* encoding finish, release recorder */
@@ -202,18 +211,12 @@ public class RecordButton extends Button {
                             try {
                                 audioRecord.stop();
                                 audioRecord.release();
-
+                                stopRecording();
+                                client.disconnect();
                             } catch (Exception e) {
                                 e.printStackTrace();
                             }
                         }
-//                        try {
-//                            org.apache.commons.io.FileUtils.writeByteArrayToFile(new File(mFileName), finalResult);
-//                        } catch (IOException e) {
-//                            e.printStackTrace();
-//                        }
-
-                        if(listener!=null) listener.callback(RecordButton.this, "success");
                     }
                 };
                 mHandler.post(runnable);
@@ -223,5 +226,7 @@ public class RecordButton extends Button {
 
         }
     }
+
+
 
 }

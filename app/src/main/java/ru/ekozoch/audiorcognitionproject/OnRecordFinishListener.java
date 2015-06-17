@@ -4,5 +4,8 @@ import android.view.View;
 
 
 public interface OnRecordFinishListener {
-        public void callback(View view, String result);
+    void onRecognized(View view, String result);
+    void onRecognitionStart(View view);
+    void onRecognitionError(View view, String error);
+    void onRecognitionEnd(View view);
 }
